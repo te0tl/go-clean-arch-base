@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+      {
+          "name": "go-clean-arch-base: Debug API",
+          "type": "go",
+          "request": "launch",
+          "mode": "debug",
+          "program": "${workspaceFolder}/cmd/api",
+          "cwd": "${workspaceFolder}",
+          "args": [],
+          "console": "integratedTerminal",
+          "preLaunchTask": "templ generate"
+      },
+      {
+          "name": "go-clean-arch-base: Open Browser",
+          "type": "node-terminal",
+          "request": "launch",
+          "command": "sleep 5 && open http://localhost:$(grep ^PORT= ${workspaceFolder}/.env | cut -d= -f2)"
+      }
+  ],
+  "compounds": [
+      {
+          "name": "go-clean-arch-base: API + Browser",
+          "configurations": [
+              "go-clean-arch-base: Debug API",
+              "go-clean-arch-base: Open Browser"
+          ],
+          "stopAll": true
+      }
+  ]
+}
