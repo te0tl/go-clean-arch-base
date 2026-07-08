@@ -2,6 +2,38 @@
 
 Guía para Claude Code al trabajar en cualquier proyecto que consuma este shared lib. Las reglas de abajo aplican para **todos** los proyectos que embeban `go-clean-arch-base`. Cada proyecto debe importar este archivo en su propio `CLAUDE.md` vía `@../go-clean-arch-base/CLAUDE.md` y agregar abajo sus reglas específicas.
 
+## Módulos del shared lib
+
+El repo es **multi-módulo**. Cada proyecto importa SOLO los módulos que usa — un backend-only nunca arrastra templ ni el driver de Mongo.
+
+| Módulo | Import path | Contiene | Depende de |
+|---|---|---|---|
+| **core** | `github.com/te0tl/go-clean-arch-base/core` | config, domain, errors canónicos, services (jwt/bcrypt/email), middleware gin, appContext, http/errors (incl. responder JSON `Respond`) | — (sin mongo, sin templ) |
+| **mongo** | `github.com/te0tl/go-clean-arch-base/mongo` | `pkg/repository/*` (cliente, session, apikey, pagination genérica) | core + mongo-driver |
+| **web** | `github.com/te0tl/go-clean-arch-base/web` | `pkg/infrastructure/http/htmx` (RespondHTMX, fragments, htmxtest) — template-agnostic | core + gin |
+| **logger** | `github.com/te0tl/go-clean-arch-base/logger` | slog estructurado + `Middleware` gin (Go 1.21, gin-free) | — |
+
+**Consumo local (dev):** cada proyecto declara los módulos que usa con `replace` a ruta relativa en su `go.mod`:
+
+```
+require github.com/te0tl/go-clean-arch-base/core v0.0.0-...
+replace github.com/te0tl/go-clean-arch-base/core => ../go-clean-arch-base/core
+```
+
+Un consumidor que requiere `mongo`/`web` debe declarar TAMBIÉN el `replace` de `core` y `logger` (los replace de un módulo requerido NO se heredan; solo aplican los del módulo principal).
+
+**Config componible:** `config.Base` trae solo lo universal (Env, Port, LogLevel, GoogleCloud). Embebé fragmentos opcionales según lo que el servicio use: `config.Mongo`, `config.JWT`, `config.Email`, `config.Frontend`. `caarlos0/env` recorre los structs embebidos, así que un solo `LoadEnv(cfg)` los parsea todos.
+
+## Inyección de dependencias — Google Wire
+
+El wiring es **generado por [Wire](https://github.com/google/wire)**, no manual. Convención:
+
+- `cmd/api/wire.go` (`//go:build wireinject`) define `ProviderSet`s por capa (`InfraSet`, `RepositorySet`, `UsecaseSet`, `ControllerSet`) y el injector `InitializeApp`.
+- `wire.Bind(new(domain.Port), new(*adapter.Impl))` mapea cada adaptador a su puerto.
+- `go generate ./cmd/api` (o `go run github.com/google/wire/cmd/wire gen ./cmd/api`) regenera `cmd/api/wire_gen.go` — **no se edita a mano**.
+- `tools.go` (`//go:build tools`) fija el CLI de wire (y templ, en fullstack) en el `go.mod`.
+- `newApp(...)` es el provider final: recibe lo wireado y arma el `*http.Server`. Si algún provider puede fallar (ej. conexión Mongo), el injector retorna `(*App, error)`.
+
 ## Arquitectura en una línea
 
 Clean / Hexagonal: `cmd → http → controller/view → usecases → domain`, con `repository/` y `infrastructure/service/` implementando los puertos del dominio. **Las dependencias apuntan al centro; el dominio no importa frameworks.**
@@ -9,7 +41,7 @@ Clean / Hexagonal: `cmd → http → controller/view → usecases → domain`, c
 ## Estructura
 
 ```
-cmd/api/                       entrypoint + wireDependencies + rutas
+cmd/api/                       entrypoint + wire.go (Wire) + rutas
 internal/
   config/                      lectura de env (embebe config.Base del shared lib)
   controller/http/<feature>/   handlers Gin (HTTP ↔ usecase)
@@ -139,7 +171,7 @@ Caso contrario, un DTO local en `internal/view/<page>/types.go` sigue siendo ace
 - Al lado del código: `foo.go` + `foo_test.go`, mismo package.
 - **Testify** (`github.com/stretchr/testify/assert`, `require`) para aserciones.
 - **Mocks manuales** en el propio `_test.go`: struct que implementa la interfaz del usecase, con campos para retornos (`user`, `findErr`) y flags de invocación (`findByEmailCalled`). No usar mockery ni gomock.
-- Helpers compartidos vienen del shared lib `github.com/te0tl/go-clean-arch-base/pkg/testutils`:
+- Helpers compartidos vienen del shared lib `github.com/te0tl/go-clean-arch-base/core/pkg/testutils`:
   - `testutils.ErrorAssertions(t, err, target, mustHaveStackTrace)` cuando el error contiene un sentinel (`errors.Is`).
   - `testutils.ErrorMessageAssertions(t, err, msg, mustHaveStackTrace)` cuando el usecase crea el error con `errorsWrapper.New` sin sentinel.
   - El proyecto puede wrappar localmente (ej. `internal/testUtils/`) para agregar helpers específicos de dominio.
@@ -226,7 +258,7 @@ Toda vista `.templ` debe tener un test que la renderice. Cuando crees una vista 
 ## Qué NO asumir
 
 - No hay ORM: Mongo crudo con driver v2 y BSON.
-- No hay framework de DI: wiring manual en `cmd/api/routes.go`.
+- El wiring NO es manual: lo genera Wire (`cmd/api/wire.go` → `wire_gen.go`). Ver "Inyección de dependencias — Google Wire".
 - No hay hot-reload integrado para `.templ`: hay que regenerar.
 - No hay migraciones de schema: Mongo es flexible; los campos nuevos se agregan con `omitempty`.
 
@@ -246,7 +278,7 @@ Toda vista `.templ` debe tener un test que la renderice. Cuando crees una vista 
 **Aplicar cuando:**
 - Estás por escribir un wrapper de una sola línea que delega a un símbolo del shared lib. No lo hagas — exponé el símbolo del shared lib directamente o agregá un wrapper de paquete-nivel acá.
 - Estás por copiar la misma función entre proyectos. Subila al shared.
-- Estás por declarar el mismo error sentinel en dos proyectos. Subilo a `pkg/domain/errors/canonical.go`.
+- Estás por declarar el mismo error sentinel en dos proyectos. Subilo a `core/pkg/domain/errors/canonical.go`.
 
 **Patrón "Default + package-level wrappers" para singletons con wiring per-project:**
 
@@ -292,10 +324,11 @@ Los call sites usan `htmx.RespondHTMX(c, err)` directamente. **No** se crea un w
 Los handlers HTMX en proyectos que consumen este módulo siguen el patrón
 documentado en `HTMX_ERROR_HANDLING.md`.
 
-El módulo provee:
-- `pkg/domain/errors/canonical.go` — 8 sentinels canónicos (`ErrInvalidInput`, `ErrValidation`, `ErrNotFound`, `ErrUnauthorized`, `ErrForbidden`, `ErrAlreadyExists`, `ErrConflict`, `ErrExternalServiceUnavailable`). Los proyectos importan estos directamente desde `pkg/domain/errors/` — **no se re-exportan** en el `internal/domain/errors/` del proyecto.
-- `pkg/infrastructure/http/htmx/respond.go` — `Config`, `Default`, `RespondHTMX`, `TagError`, `StatusForError`, `WithFormFallback`, `DefaultRender`, `Renderable`. Es la API completa; los proyectos no envuelven.
-- `pkg/infrastructure/http/htmx/htmxtest/` — helpers de test (`NewCtx`, `Render`, `Marker`) reutilizables.
-- `pkg/infrastructure/http/middleware/logger.go` — captura headers HTMX y lee `ERROR_MESSAGE_CONTEXT_KEY` para registrar el error real aunque el status sea 200.
+El shared lib provee:
+- **core** `core/pkg/domain/errors/canonical.go` — 8 sentinels canónicos (`ErrInvalidInput`, `ErrValidation`, `ErrNotFound`, `ErrUnauthorized`, `ErrForbidden`, `ErrAlreadyExists`, `ErrConflict`, `ErrExternalServiceUnavailable`). Los proyectos importan estos directamente desde `core/pkg/domain/errors/` — **no se re-exportan** en el `internal/domain/errors/` del proyecto.
+- **core** `core/pkg/infrastructure/http/errors/respond.go` — `Respond(c, err)` / `StatusForError(err)`: responder **JSON** para APIs backend, mismo mapeo canónico→status que htmx. Úsalo en handlers JSON; usá htmx en handlers que devuelven HTML.
+- **web** `web/pkg/infrastructure/http/htmx/respond.go` — `Config`, `Default`, `RespondHTMX`, `TagError`, `StatusForError`, `WithFormFallback`, `DefaultRender`, `Renderable`. Es la API completa; los proyectos no envuelven, solo cablean `htmx.Default` con sus fragments en un `init()`.
+- **web** `web/pkg/infrastructure/http/htmx/htmxtest/` — helpers de test (`NewCtx`, `Render`, `Marker`) reutilizables.
+- **logger** `logger.Middleware` — captura headers HTMX y lee `ERROR_MESSAGE_CONTEXT_KEY` para registrar el error real aunque el status sea 200.
 
 Al implementar handlers HTMX, leer `HTMX_ERROR_HANDLING.md` primero.

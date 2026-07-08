@@ -1,3 +1,7 @@
+# Env (secrets — nunca al repo)
+.env
+.env.local
+
 # Go
 *.test
 *.out
