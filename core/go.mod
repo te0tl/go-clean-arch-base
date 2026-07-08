@@ -12,7 +12,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/sendgrid/sendgrid-go v3.16.1+incompatible
 	github.com/stretchr/testify v1.11.1
-	github.com/te0tl/go-clean-arch-base/logger v0.0.0-00010101000000-000000000000
+	github.com/te0tl/go-clean-arch-base/logger v0.1.0
 	golang.org/x/crypto v0.48.0
 )
 

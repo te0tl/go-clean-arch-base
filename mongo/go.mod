@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/pkg/errors v0.9.1
-	github.com/te0tl/go-clean-arch-base/core v0.0.0-00010101000000-000000000000
+	github.com/te0tl/go-clean-arch-base/core v0.1.0
 	go.mongodb.org/mongo-driver/v2 v2.4.1
 )
 
